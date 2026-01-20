@@ -1,0 +1,145 @@
+########################################
+# OpenTelemetry Collector – Enterprise #
+########################################
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: "otel-collector"
+          scrape_interval: 15s
+          static_configs:
+            - targets: ["0.0.0.0:8888"]
+
+processors:
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 512
+    spike_limit_mib: 128
+
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+
+  attributes:
+    actions:
+      - key: environment
+        value: dev
+        action: upsert
+      - key: platform
+        value: observability-one
+        action: upsert
+
+  resource:
+    attributes:
+      - key: service.namespace
+        value: observability
+        action: upsert
+
+  transform:
+    error_mode: ignore
+    trace_statements:
+      - context: span
+        statements:
+          - set(attributes["latency.ms"], duration / 1000000)
+
+exporters:
+  # ---- Debug / Local ----
+  logging:
+    loglevel: info
+
+  # ---- Prometheus (metrics) ----
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+    namespace: observability_one
+
+  # ---- Jaeger (traces local) ----
+  jaeger:
+    endpoint: jaeger:14250
+    tls:
+      insecure: true
+
+  # ---- Datadog (example) ----
+  datadog:
+    api:
+      key: ${DATADOG_API_KEY}
+    site: datadoghq.com
+
+  # ---- AWS CloudWatch (example) ----
+  awscloudwatchlogs:
+    log_group_name: "/observability-one/logs"
+    log_stream_name: "otel"
+    region: ${AWS_REGION}
+
+  # ---- OTLP (for SigNoz / downstream pipelines) ----
+  otlp:
+    endpoint: signoz:4317
+    tls:
+      insecure: true
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+  pprof:
+    endpoint: 0.0.0.0:1777
+
+  zpages:
+    endpoint: 0.0.0.0:55679
+
+service:
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      address: 0.0.0.0:8888
+
+  extensions:
+    - health_check
+    - pprof
+    - zpages
+
+  pipelines:
+
+    traces:
+      receivers: [otlp]
+      processors:
+        - memory_limiter
+        - attributes
+        - resource
+        - transform
+        - batch
+      exporters:
+        - logging
+        - jaeger
+        - datadog
+        - otlp
+
+    metrics:
+      receivers: [otlp, prometheus]
+      processors:
+        - memory_limiter
+        - attributes
+        - resource
+        - batch
+      exporters:
+        - prometheus
+        - datadog
+
+    logs:
+      receivers: [otlp]
+      processors:
+        - memory_limiter
+        - attributes
+        - resource
+        - batch
+      exporters:
+        - logging
+        - awscloudwatchlogs
